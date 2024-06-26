@@ -3,11 +3,13 @@
 namespace Spatie\Permission\Tests;
 
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Foundation\Console\AboutCommand;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
+use Laravel\Passport\PassportServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 use Spatie\Permission\Contracts\Permission;
 use Spatie\Permission\Contracts\Role;
@@ -15,6 +17,7 @@ use Spatie\Permission\Exceptions\UnauthorizedException;
 use Spatie\Permission\PermissionRegistrar;
 use Spatie\Permission\PermissionServiceProvider;
 use Spatie\Permission\Tests\TestModels\Admin;
+use Spatie\Permission\Tests\TestModels\Client;
 use Spatie\Permission\Tests\TestModels\User;
 
 abstract class TestCase extends Orchestra
@@ -47,6 +50,15 @@ abstract class TestCase extends Orchestra
 
     protected static $customMigration;
 
+    /** @var bool */
+    protected $usePassport = false;
+
+    protected Client $testClient;
+
+    protected \Spatie\Permission\Models\Permission $testClientPermission;
+
+    protected \Spatie\Permission\Models\Role $testClientRole;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -61,7 +73,20 @@ abstract class TestCase extends Orchestra
             setPermissionsTeamId(1);
         }
 
+        if ($this->usePassport) {
+            $this->setUpPassport($this->app);
+        }
+
         $this->setUpRoutes();
+    }
+
+    protected function tearDown(): void
+    {
+        parent::tearDown();
+
+        if (method_exists(AboutCommand::class, 'flushState')) {
+            AboutCommand::flushState();
+        }
     }
 
     /**
@@ -70,8 +95,11 @@ abstract class TestCase extends Orchestra
      */
     protected function getPackageProviders($app)
     {
-        return [
+        return $this->getLaravelVersion() < 9 ? [
             PermissionServiceProvider::class,
+        ] : [
+            PermissionServiceProvider::class,
+            PassportServiceProvider::class,
         ];
     }
 
@@ -139,6 +167,13 @@ abstract class TestCase extends Orchestra
             $table->string('email');
         });
 
+        $schema->create('content', function (Blueprint $table) {
+            $table->increments('id');
+            $table->string('content');
+            $table->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
+            $table->timestamps();
+        });
+
         if (Cache::getStore() instanceof \Illuminate\Cache\DatabaseStore ||
             $app[PermissionRegistrar::class]->getCacheStore() instanceof \Illuminate\Cache\DatabaseStore) {
             $this->createCacheTable();
@@ -167,6 +202,27 @@ abstract class TestCase extends Orchestra
         $app[Permission::class]->create(['name' => 'edit-blog']);
         $this->testAdminPermission = $app[Permission::class]->create(['name' => 'admin-permission', 'guard_name' => 'admin']);
         $app[Permission::class]->create(['name' => 'Edit News']);
+    }
+
+    protected function setUpPassport($app): void
+    {
+        if ($this->getLaravelVersion() < 9) {
+            return;
+        }
+
+        $app['config']->set('permission.use_passport_client_credentials', true);
+        $app['config']->set('auth.guards.api', ['driver' => 'passport', 'provider' => 'users']);
+
+        // mimic passport:install (must load migrations using our own call to loadMigrationsFrom() else rollbacks won't occur, and migrations will be left in skeleton directory
+        $this->artisan('passport:keys');
+        $this->loadMigrationsFrom(__DIR__.'/../vendor/laravel/passport/database/migrations/');
+        $provider = in_array('users', array_keys(config('auth.providers'))) ? 'users' : null;
+        $this->artisan('passport:client', ['--personal' => true, '--name' => config('app.name').' Personal Access Client']);
+        $this->artisan('passport:client', ['--password' => true, '--name' => config('app.name').' Password Grant Client', '--provider' => $provider]);
+
+        $this->testClient = Client::create(['name' => 'Test', 'redirect' => 'https://example.com', 'personal_access_client' => 0, 'password_client' => 0, 'revoked' => 0]);
+        $this->testClientRole = $app[Role::class]->create(['name' => 'clientRole', 'guard_name' => 'api']);
+        $this->testClientPermission = $app[Permission::class]->create(['name' => 'edit-posts', 'guard_name' => 'api']);
     }
 
     private function prepareMigration()
@@ -227,10 +283,15 @@ abstract class TestCase extends Orchestra
     }
 
     ////// TEST HELPERS
-    public function runMiddleware($middleware, $permission, $guard = null)
+    public function runMiddleware($middleware, $permission, $guard = null, bool $client = false)
     {
+        $request = new Request;
+        if ($client) {
+            $request->headers->set('Authorization', 'Bearer '.str()->random(30));
+        }
+
         try {
-            return $middleware->handle(new Request(), function () {
+            return $middleware->handle($request, function () {
                 return (new Response())->setContent('<html></html>');
             }, $permission, $guard)->status();
         } catch (UnauthorizedException $e) {
@@ -253,5 +314,10 @@ abstract class TestCase extends Orchestra
         return function () {
             return (new Response())->setContent('<html></html>');
         };
+    }
+
+    protected function getLaravelVersion()
+    {
+        return (float) app()->version();
     }
 }

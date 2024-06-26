@@ -91,19 +91,18 @@ class Role extends Model implements RoleContract
     /**
      * Find a role by its name and guard name.
      *
-     * @param  string|null  $guardName
      * @return RoleContract|Role
      *
      * @throws RoleDoesNotExist
      */
-    public static function findByName(string $name, $guardName = null): RoleContract
+    public static function findByName(string $name, ?string $guardName = null): RoleContract
     {
         $guardName = $guardName ?? Guard::getDefaultName(static::class);
 
         $role = static::findByParam(['name' => $name, 'guard_name' => $guardName]);
 
         if (! $role) {
-            throw RoleDoesNotExist::named($name);
+            throw RoleDoesNotExist::named($name, $guardName);
         }
 
         return $role;
@@ -112,18 +111,16 @@ class Role extends Model implements RoleContract
     /**
      * Find a role by its id (and optionally guardName).
      *
-     * @param  int|string  $id
-     * @param  string|null  $guardName
      * @return RoleContract|Role
      */
-    public static function findById($id, $guardName = null): RoleContract
+    public static function findById(int|string $id, ?string $guardName = null): RoleContract
     {
         $guardName = $guardName ?? Guard::getDefaultName(static::class);
 
         $role = static::findByParam([(new static())->getKeyName() => $id, 'guard_name' => $guardName]);
 
         if (! $role) {
-            throw RoleDoesNotExist::withId($id);
+            throw RoleDoesNotExist::withId($id, $guardName);
         }
 
         return $role;
@@ -132,10 +129,9 @@ class Role extends Model implements RoleContract
     /**
      * Find or create role by its name (and optionally guardName).
      *
-     * @param  string|null  $guardName
      * @return RoleContract|Role
      */
-    public static function findOrCreate(string $name, $guardName = null): RoleContract
+    public static function findOrCreate(string $name, ?string $guardName = null): RoleContract
     {
         $guardName = $guardName ?? Guard::getDefaultName(static::class);
 
@@ -176,12 +172,11 @@ class Role extends Model implements RoleContract
     /**
      * Determine if the role may perform the given permission.
      *
-     * @param  string|int|Permission|\BackedEnum  $permission
-     * @param  string|null  $guardName
+     * @param  string|int|\Spatie\Permission\Contracts\Permission|\BackedEnum  $permission
      *
      * @throws PermissionDoesNotExist|GuardDoesNotMatch
      */
-    public function hasPermissionTo($permission, $guardName = null): bool
+    public function hasPermissionTo($permission, ?string $guardName = null): bool
     {
         if ($this->getWildcardClass()) {
             return $this->hasWildcardPermission($permission, $guardName);

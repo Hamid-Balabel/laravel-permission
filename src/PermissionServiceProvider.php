@@ -2,9 +2,12 @@
 
 namespace Spatie\Permission;
 
+use Composer\InstalledVersions;
 use Illuminate\Contracts\Auth\Access\Gate;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Foundation\Console\AboutCommand;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
@@ -25,6 +28,8 @@ class PermissionServiceProvider extends ServiceProvider
 
         $this->registerModelBindings();
 
+        $this->registerOctaneListener();
+
         $this->callAfterResolving(Gate::class, function (Gate $gate, Application $app) {
             if ($this->app['config']->get('permission.register_permission_check_method')) {
                 /** @var PermissionRegistrar $permissionLoader */
@@ -35,6 +40,8 @@ class PermissionServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(PermissionRegistrar::class);
+
+        $this->registerAbout();
     }
 
     public function register()
@@ -85,6 +92,29 @@ class PermissionServiceProvider extends ServiceProvider
         ]);
     }
 
+    protected function registerOctaneListener(): void
+    {
+        if ($this->app->runningInConsole() || ! $this->app['config']->get('octane.listeners')) {
+            return;
+        }
+
+        $dispatcher = $this->app[Dispatcher::class];
+        // @phpstan-ignore-next-line
+        $dispatcher->listen(function (\Laravel\Octane\Contracts\OperationTerminated $event) {
+            // @phpstan-ignore-next-line
+            $event->sandbox->make(PermissionRegistrar::class)->setPermissionsTeamId(null);
+        });
+
+        if (! $this->app['config']->get('permission.register_octane_reset_listener')) {
+            return;
+        }
+        // @phpstan-ignore-next-line
+        $dispatcher->listen(function (\Laravel\Octane\Contracts\OperationTerminated $event) {
+            // @phpstan-ignore-next-line
+            $event->sandbox->make(PermissionRegistrar::class)->clearPermissionsCollection();
+        });
+    }
+
     protected function registerModelBindings(): void
     {
         $this->app->bind(PermissionContract::class, fn ($app) => $app->make($app->config['permission.models.permission']));
@@ -96,28 +126,20 @@ class PermissionServiceProvider extends ServiceProvider
         return auth($guard)->check() && auth($guard)->user()->{$method}($role);
     }
 
-    protected function registerBladeExtensions($bladeCompiler): void
+    protected function registerBladeExtensions(BladeCompiler $bladeCompiler): void
     {
         $bladeMethodWrapper = '\\Spatie\\Permission\\PermissionServiceProvider::bladeMethodWrapper';
 
-        $bladeCompiler->directive('role', fn ($args) => "<?php if({$bladeMethodWrapper}('hasRole', {$args})): ?>");
-        $bladeCompiler->directive('elserole', fn ($args) => "<?php elseif({$bladeMethodWrapper}('hasRole', {$args})): ?>");
-        $bladeCompiler->directive('endrole', fn () => '<?php endif; ?>');
+        // permission checks
+        $bladeCompiler->if('haspermission', fn () => $bladeMethodWrapper('checkPermissionTo', ...func_get_args()));
 
-        $bladeCompiler->directive('hasrole', fn ($args) => "<?php if({$bladeMethodWrapper}('hasRole', {$args})): ?>");
-        $bladeCompiler->directive('endhasrole', fn () => '<?php endif; ?>');
-
-        $bladeCompiler->directive('hasanyrole', fn ($args) => "<?php if({$bladeMethodWrapper}('hasAnyRole', {$args})): ?>");
-        $bladeCompiler->directive('endhasanyrole', fn () => '<?php endif; ?>');
-
-        $bladeCompiler->directive('hasallroles', fn ($args) => "<?php if({$bladeMethodWrapper}('hasAllRoles', {$args})): ?>");
-        $bladeCompiler->directive('endhasallroles', fn () => '<?php endif; ?>');
-
-        $bladeCompiler->directive('unlessrole', fn ($args) => "<?php if(! {$bladeMethodWrapper}('hasRole', {$args})): ?>");
+        // role checks
+        $bladeCompiler->if('role', fn () => $bladeMethodWrapper('hasRole', ...func_get_args()));
+        $bladeCompiler->if('hasrole', fn () => $bladeMethodWrapper('hasRole', ...func_get_args()));
+        $bladeCompiler->if('hasanyrole', fn () => $bladeMethodWrapper('hasAnyRole', ...func_get_args()));
+        $bladeCompiler->if('hasallroles', fn () => $bladeMethodWrapper('hasAllRoles', ...func_get_args()));
+        $bladeCompiler->if('hasexactroles', fn () => $bladeMethodWrapper('hasExactRoles', ...func_get_args()));
         $bladeCompiler->directive('endunlessrole', fn () => '<?php endif; ?>');
-
-        $bladeCompiler->directive('hasexactroles', fn ($args) => "<?php if({$bladeMethodWrapper}('hasExactRoles', {$args})): ?>");
-        $bladeCompiler->directive('endhasexactroles', fn () => '<?php endif; ?>');
     }
 
     protected function registerMacroHelpers(): void
@@ -150,5 +172,31 @@ class PermissionServiceProvider extends ServiceProvider
             ->flatMap(fn ($path) => $filesystem->glob($path.'*_'.$migrationFileName))
             ->push($this->app->databasePath()."/migrations/{$timestamp}_{$migrationFileName}")
             ->first();
+    }
+
+    protected function registerAbout(): void
+    {
+        if (! class_exists(InstalledVersions::class) || ! class_exists(AboutCommand::class)) {
+            return;
+        }
+
+        // array format: 'Display Text' => 'boolean-config-key name'
+        $features = [
+            'Teams' => 'teams',
+            'Wildcard-Permissions' => 'enable_wildcard_permission',
+            'Octane-Listener' => 'register_octane_reset_listener',
+            'Passport' => 'use_passport_client_credentials',
+        ];
+
+        $config = $this->app['config'];
+
+        AboutCommand::add('Spatie Permissions', static fn () => [
+            'Features Enabled' => collect($features)
+                ->filter(fn (string $feature, string $name): bool => $config->get("permission.{$feature}"))
+                ->keys()
+                ->whenEmpty(fn (Collection $collection) => $collection->push('Default'))
+                ->join(', '),
+            'Version' => InstalledVersions::getPrettyVersion('spatie/laravel-permission'),
+        ]);
     }
 }

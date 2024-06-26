@@ -21,6 +21,19 @@ class HasPermissionsTest extends TestCase
     }
 
     /** @test */
+    public function it_can_assign_a_permission_to_a_user_with_a_non_default_guard()
+    {
+        $testUserPermission = app(Permission::class)->create([
+            'name' => 'edit-articles',
+            'guard_name' => 'api',
+        ]);
+
+        $this->testUser->givePermissionTo($testUserPermission);
+
+        $this->assertTrue($this->testUser->hasPermissionTo($testUserPermission));
+    }
+
+    /** @test */
     public function it_throws_an_exception_when_assigning_a_permission_that_does_not_exist()
     {
         $this->expectException(PermissionDoesNotExist::class);
@@ -87,123 +100,160 @@ class HasPermissionsTest extends TestCase
         $enum2 = TestModels\TestRolePermissionsEnum::EDITARTICLES;
         $permission1 = app(Permission::class)->findOrCreate($enum1->value, 'web');
         $permission2 = app(Permission::class)->findOrCreate($enum2->value, 'web');
+
+        User::all()->each(fn ($item) => $item->delete());
         $user1 = User::create(['email' => 'user1@test.com']);
         $user2 = User::create(['email' => 'user2@test.com']);
+        $user3 = User::create(['email' => 'user3@test.com']);
         $user1->givePermissionTo([$enum1, $enum2]);
         $this->testUserRole->givePermissionTo($enum2);
         $user2->assignRole('testRole');
 
         $scopedUsers1 = User::permission($enum2)->get();
         $scopedUsers2 = User::permission([$enum1])->get();
+        $scopedUsers3 = User::withoutPermission([$enum1])->get();
+        $scopedUsers4 = User::withoutPermission([$enum2])->get();
 
         $this->assertEquals(2, $scopedUsers1->count());
         $this->assertEquals(1, $scopedUsers2->count());
+        $this->assertEquals(2, $scopedUsers3->count());
+        $this->assertEquals(1, $scopedUsers4->count());
     }
 
     /** @test */
     public function it_can_scope_users_using_a_string()
     {
+        User::all()->each(fn ($item) => $item->delete());
         $user1 = User::create(['email' => 'user1@test.com']);
         $user2 = User::create(['email' => 'user2@test.com']);
+        $user3 = User::create(['email' => 'user3@test.com']);
         $user1->givePermissionTo(['edit-articles', 'edit-news']);
         $this->testUserRole->givePermissionTo('edit-articles');
         $user2->assignRole('testRole');
 
         $scopedUsers1 = User::permission('edit-articles')->get();
         $scopedUsers2 = User::permission(['edit-news'])->get();
+        $scopedUsers3 = User::withoutPermission('edit-news')->get();
 
         $this->assertEquals(2, $scopedUsers1->count());
         $this->assertEquals(1, $scopedUsers2->count());
+        $this->assertEquals(2, $scopedUsers3->count());
     }
 
     /** @test */
     public function it_can_scope_users_using_a_int()
     {
+        User::all()->each(fn ($item) => $item->delete());
         $user1 = User::create(['email' => 'user1@test.com']);
         $user2 = User::create(['email' => 'user2@test.com']);
+        $user3 = User::create(['email' => 'user3@test.com']);
         $user1->givePermissionTo([1, 2]);
         $this->testUserRole->givePermissionTo(1);
         $user2->assignRole('testRole');
 
         $scopedUsers1 = User::permission(1)->get();
         $scopedUsers2 = User::permission([2])->get();
+        $scopedUsers3 = User::withoutPermission([2])->get();
 
         $this->assertEquals(2, $scopedUsers1->count());
         $this->assertEquals(1, $scopedUsers2->count());
+        $this->assertEquals(2, $scopedUsers3->count());
     }
 
     /** @test */
     public function it_can_scope_users_using_an_array()
     {
+        User::all()->each(fn ($item) => $item->delete());
         $user1 = User::create(['email' => 'user1@test.com']);
         $user2 = User::create(['email' => 'user2@test.com']);
+        $user3 = User::create(['email' => 'user3@test.com']);
         $user1->givePermissionTo(['edit-articles', 'edit-news']);
         $this->testUserRole->givePermissionTo('edit-articles');
         $user2->assignRole('testRole');
+        $user3->assignRole('testRole2');
 
         $scopedUsers1 = User::permission(['edit-articles', 'edit-news'])->get();
         $scopedUsers2 = User::permission(['edit-news'])->get();
+        $scopedUsers3 = User::withoutPermission(['edit-news'])->get();
 
         $this->assertEquals(2, $scopedUsers1->count());
         $this->assertEquals(1, $scopedUsers2->count());
+        $this->assertEquals(2, $scopedUsers3->count());
     }
 
     /** @test */
     public function it_can_scope_users_using_a_collection()
     {
+        User::all()->each(fn ($item) => $item->delete());
         $user1 = User::create(['email' => 'user1@test.com']);
         $user2 = User::create(['email' => 'user2@test.com']);
+        $user3 = User::create(['email' => 'user3@test.com']);
         $user1->givePermissionTo(['edit-articles', 'edit-news']);
         $this->testUserRole->givePermissionTo('edit-articles');
         $user2->assignRole('testRole');
+        $user3->assignRole('testRole2');
 
         $scopedUsers1 = User::permission(collect(['edit-articles', 'edit-news']))->get();
         $scopedUsers2 = User::permission(collect(['edit-news']))->get();
+        $scopedUsers3 = User::withoutPermission(collect(['edit-news']))->get();
 
         $this->assertEquals(2, $scopedUsers1->count());
         $this->assertEquals(1, $scopedUsers2->count());
+        $this->assertEquals(2, $scopedUsers3->count());
     }
 
     /** @test */
     public function it_can_scope_users_using_an_object()
     {
+        User::all()->each(fn ($item) => $item->delete());
         $user1 = User::create(['email' => 'user1@test.com']);
         $user1->givePermissionTo($this->testUserPermission->name);
 
         $scopedUsers1 = User::permission($this->testUserPermission)->get();
         $scopedUsers2 = User::permission([$this->testUserPermission])->get();
         $scopedUsers3 = User::permission(collect([$this->testUserPermission]))->get();
+        $scopedUsers4 = User::withoutPermission(collect([$this->testUserPermission]))->get();
 
         $this->assertEquals(1, $scopedUsers1->count());
         $this->assertEquals(1, $scopedUsers2->count());
         $this->assertEquals(1, $scopedUsers3->count());
+        $this->assertEquals(0, $scopedUsers4->count());
     }
 
     /** @test */
-    public function it_can_scope_users_without_permissions_only_role()
+    public function it_can_scope_users_without_direct_permissions_only_role()
     {
+        User::all()->each(fn ($item) => $item->delete());
         $user1 = User::create(['email' => 'user1@test.com']);
         $user2 = User::create(['email' => 'user2@test.com']);
+        $user3 = User::create(['email' => 'user3@test.com']);
         $this->testUserRole->givePermissionTo('edit-articles');
         $user1->assignRole('testRole');
         $user2->assignRole('testRole');
+        $user3->assignRole('testRole2');
 
-        $scopedUsers = User::permission('edit-articles')->get();
+        $scopedUsers1 = User::permission('edit-articles')->get();
+        $scopedUsers2 = User::withoutPermission('edit-articles')->get();
 
-        $this->assertEquals(2, $scopedUsers->count());
+        $this->assertEquals(2, $scopedUsers1->count());
+        $this->assertEquals(1, $scopedUsers2->count());
     }
 
     /** @test */
-    public function it_can_scope_users_without_permissions_only_permission()
+    public function it_can_scope_users_with_only_direct_permission()
     {
+        User::all()->each(fn ($item) => $item->delete());
         $user1 = User::create(['email' => 'user1@test.com']);
         $user2 = User::create(['email' => 'user2@test.com']);
+        $user3 = User::create(['email' => 'user3@test.com']);
         $user1->givePermissionTo(['edit-news']);
         $user2->givePermissionTo(['edit-articles', 'edit-news']);
 
-        $scopedUsers = User::permission('edit-news')->get();
+        $scopedUsers1 = User::permission('edit-news')->get();
+        $scopedUsers2 = User::withoutPermission('edit-news')->get();
 
-        $this->assertEquals(2, $scopedUsers->count());
+        $this->assertEquals(2, $scopedUsers1->count());
+        $this->assertEquals(1, $scopedUsers2->count());
     }
 
     /** @test */
@@ -252,6 +302,10 @@ class HasPermissionsTest extends TestCase
         $this->expectException(PermissionDoesNotExist::class);
 
         User::permission('not defined permission')->get();
+
+        $this->expectException(PermissionDoesNotExist::class);
+
+        User::withoutPermission('not defined permission')->get();
     }
 
     /** @test */
@@ -261,9 +315,17 @@ class HasPermissionsTest extends TestCase
 
         User::permission('testAdminPermission')->get();
 
+        $this->expectException(PermissionDoesNotExist::class);
+
+        User::withoutPermission('testAdminPermission')->get();
+
         $this->expectException(GuardDoesNotMatch::class);
 
         User::permission($this->testAdminPermission)->get();
+
+        $this->expectException(GuardDoesNotMatch::class);
+
+        User::withoutPermission($this->testAdminPermission)->get();
     }
 
     /** @test */
@@ -493,6 +555,16 @@ class HasPermissionsTest extends TestCase
     }
 
     /** @test */
+    public function it_can_avoid_sync_duplicated_permissions()
+    {
+        $this->testUser->syncPermissions('edit-articles', 'edit-blog', 'edit-blog');
+
+        $this->assertTrue($this->testUser->hasDirectPermission('edit-articles'));
+
+        $this->assertTrue($this->testUser->hasDirectPermission('edit-blog'));
+    }
+
+    /** @test */
     public function it_can_sync_multiple_permissions_by_id()
     {
         $this->testUser->givePermissionTo('edit-news');
@@ -564,6 +636,7 @@ class HasPermissionsTest extends TestCase
         $user = new User(['email' => 'test@user.com']);
         $user->syncPermissions('edit-articles');
         $user->save();
+        $user->save(); // test save same model twice
 
         $this->assertTrue($user->hasPermissionTo('edit-articles'));
 

@@ -23,6 +23,8 @@ trait HasPermissions
 
     private ?string $wildcardClass = null;
 
+    private array $wildcardPermissionsIndex;
+
     public static function bootHasPermissions()
     {
         static::deleting(function ($model) {
@@ -51,7 +53,7 @@ trait HasPermissions
         return $this->permissionClass;
     }
 
-    protected function getWildcardClass()
+    public function getWildcardClass()
     {
         if (! is_null($this->wildcardClass)) {
             return $this->wildcardClass;
@@ -87,37 +89,50 @@ trait HasPermissions
             return $relation;
         }
 
-        return $relation->wherePivot(app(PermissionRegistrar::class)->teamsKey, getPermissionsTeamId());
+        $teamsKey = app(PermissionRegistrar::class)->teamsKey;
+        $relation->withPivot($teamsKey);
+
+        return $relation->wherePivot($teamsKey, getPermissionsTeamId());
     }
 
     /**
      * Scope the model query to certain permissions only.
      *
      * @param  string|int|array|Permission|Collection|\BackedEnum  $permissions
+     * @param  bool  $without
      */
-    public function scopePermission(Builder $query, $permissions): Builder
+    public function scopePermission(Builder $query, $permissions, $without = false): Builder
     {
         $permissions = $this->convertToPermissionModels($permissions);
 
-        $permissionClass = $this->getPermissionClass();
-        $permissionKey = (new $permissionClass())->getKeyName();
-        $roleClass = is_a($this, Role::class) ? static::class : $this->getRoleClass();
-        $roleKey = (new $roleClass())->getKeyName();
+        $permissionKey = (new ($this->getPermissionClass())())->getKeyName();
+        $roleKey = (new (is_a($this, Role::class) ? static::class : $this->getRoleClass())())->getKeyName();
 
         $rolesWithPermissions = is_a($this, Role::class) ? [] : array_unique(
             array_reduce($permissions, fn ($result, $permission) => array_merge($result, $permission->roles->all()), [])
         );
 
         return $query->where(fn (Builder $query) => $query
-            ->whereHas('permissions', fn (Builder $subQuery) => $subQuery
-                ->whereIn(config('permission.table_names.permissions').".$permissionKey", \array_column($permissions, $permissionKey))
+            ->{! $without ? 'whereHas' : 'whereDoesntHave'}('permissions', fn (Builder $subQuery) => $subQuery
+            ->whereIn(config('permission.table_names.permissions').".$permissionKey", \array_column($permissions, $permissionKey))
             )
             ->when(count($rolesWithPermissions), fn ($whenQuery) => $whenQuery
-                ->orWhereHas('roles', fn (Builder $subQuery) => $subQuery
-                    ->whereIn(config('permission.table_names.roles').".$roleKey", \array_column($rolesWithPermissions, $roleKey))
+                ->{! $without ? 'orWhereHas' : 'whereDoesntHave'}('roles', fn (Builder $subQuery) => $subQuery
+                ->whereIn(config('permission.table_names.roles').".$roleKey", \array_column($rolesWithPermissions, $roleKey))
                 )
             )
         );
+    }
+
+    /**
+     * Scope the model query to only those without certain permissions,
+     * whether indirectly by role or by direct permission.
+     *
+     * @param  string|int|array|Permission|Collection|\BackedEnum  $permissions
+     */
+    public function scopeWithoutPermission(Builder $query, $permissions): Builder
+    {
+        return $this->scopePermission($query, $permissions, true);
     }
 
     /**
@@ -219,6 +234,7 @@ trait HasPermissions
         }
 
         if ($permission instanceof Permission) {
+            $guardName = $permission->guard_name ?? $guardName;
             $permission = $permission->name;
         }
 
@@ -226,21 +242,11 @@ trait HasPermissions
             throw WildcardPermissionInvalidArgument::create();
         }
 
-        $WildcardPermissionClass = $this->getWildcardClass();
-
-        foreach ($this->getAllPermissions() as $userPermission) {
-            if ($guardName !== $userPermission->guard_name) {
-                continue;
-            }
-
-            $userPermission = new $WildcardPermissionClass($userPermission->name);
-
-            if ($userPermission->implies($permission)) {
-                return true;
-            }
-        }
-
-        return false;
+        return app($this->getWildcardClass(), ['record' => $this])->implies(
+            $permission,
+            $guardName,
+            app(PermissionRegistrar::class)->getWildcardPermissionIndex($this),
+        );
     }
 
     /**
@@ -350,7 +356,7 @@ trait HasPermissions
     }
 
     /**
-     * Returns permissions ids as array keys
+     * Returns array of permissions ids
      *
      * @param  string|int|array|Permission|Collection|\BackedEnum  $permissions
      */
@@ -368,9 +374,10 @@ trait HasPermissions
                     return $array;
                 }
 
-                $this->ensureModelSharesGuard($permission);
-
-                $array[] = $permission->getKey();
+                if (! in_array($permission->getKey(), $array)) {
+                    $this->ensureModelSharesGuard($permission);
+                    $array[] = $permission->getKey();
+                }
 
                 return $array;
             }, []);
@@ -397,14 +404,16 @@ trait HasPermissions
             $model->unsetRelation('permissions');
         } else {
             $class = \get_class($model);
+            $saved = false;
 
             $class::saved(
-                function ($object) use ($permissions, $model, $teamPivot) {
-                    if ($model->getKey() != $object->getKey()) {
+                function ($object) use ($permissions, $model, $teamPivot, &$saved) {
+                    if ($saved || $model->getKey() != $object->getKey()) {
                         return;
                     }
                     $model->permissions()->attach($permissions, $teamPivot);
                     $model->unsetRelation('permissions');
+                    $saved = true;
                 }
             );
         }
@@ -413,7 +422,16 @@ trait HasPermissions
             $this->forgetCachedPermissions();
         }
 
+        $this->forgetWildcardPermissionIndex();
+
         return $this;
+    }
+
+    public function forgetWildcardPermissionIndex(): void
+    {
+        app(PermissionRegistrar::class)->forgetWildcardPermissionIndex(
+            is_a($this, Role::class) ? null : $this,
+        );
     }
 
     /**
@@ -446,6 +464,8 @@ trait HasPermissions
         if (is_a($this, Role::class)) {
             $this->forgetCachedPermissions();
         }
+
+        $this->forgetWildcardPermissionIndex();
 
         $this->unsetRelation('permissions');
 

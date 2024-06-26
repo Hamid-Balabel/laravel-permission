@@ -28,6 +28,8 @@ enum TestRolePermissionsEnum: string
     case EDITOR = 'editor';
     case USERMANAGER = 'user-manager';
     case ADMIN = 'administrator';
+    case CASTED_ENUM_1 = 'casted_enum-1';
+    case CASTED_ENUM_2 = 'casted_enum-2';
 
     case VIEWARTICLES = 'view articles';
     case EDITARTICLES = 'edit articles';
@@ -44,13 +46,13 @@ enum TestRolePermissionsEnum: string
     public function label(): string
     {
         return match ($this) {
-            static::WRITER => 'Writers',
-            static::EDITOR => 'Editors',
-            static::USERMANAGER => 'User Managers',
-            static::ADMIN => 'Admins',
+            self::WRITER => 'Writers',
+            self::EDITOR => 'Editors',
+            self::USERMANAGER => 'User Managers',
+            self::ADMIN => 'Admins',
 
-            static::VIEWARTICLES => 'View Articles',
-            static::EDITARTICLES => 'Edit Articles',
+            self::VIEWARTICLES => 'View Articles',
+            self::EDITARTICLES => 'Edit Articles',
         };
     }
 }
