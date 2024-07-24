@@ -1,6 +1,6 @@
 <?php
 
-namespace Spatie\Permission\Middleware;
+namespace Spatie\Permission\Middlewares;
 
 use Closure;
 use Illuminate\Support\Facades\Auth;
